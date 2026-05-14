@@ -12,6 +12,7 @@ config = json.loads(os.environ["CONFIG"])
 #   "saas.itedev.com": {
 #     "cn": 4,           # 生成A/AAAA记录
 #     "cn1": 4           # 生成A/AAAA记录
+#     "@": 2             # 主域名记录
 #     # "def" 自动处理，通过DoH解析CNAME目标得到IP
 #   }
 # }
@@ -212,8 +213,13 @@ IPV6_POOL = flatten_cidrs(IPV6_CIDRS, is_v6=True)
 print(f"IPv4池: {len(IPV4_POOL)} 个可用IP")
 print(f"IPv6池: {len(IPV6_POOL)} 个可用IP")
 
-# 获取 CNAME 目标的IP
-CNAME_IPS = get_cname_target_ips()
+# 检查是否有 def 子域名需要处理
+has_def = any('def' in sub_configs for sub_configs in DOMAINS.values())
+if has_def:
+    CNAME_IPS = get_cname_target_ips()
+else:
+    CNAME_IPS = {'v4': [], 'v6': []}
+    print("\n没有 def 子域名，跳过 DoH 解析")
 
 def get_random_ips_from_pool(pool, count):
     """从IP池中随机获取指定数量的IP"""
@@ -322,13 +328,22 @@ if __name__ == '__main__':
         # 遍历每个子域名配置
         for sub_prefix, group_count in sub_configs.items():
             if group_count <= 0:
-                print(f"跳过 {sub_prefix}.{main_domain}: 组数无效 {group_count}")
+                if sub_prefix == "@":
+                    print(f"跳过 {main_domain}: 组数无效 {group_count}")
+                else:
+                    print(f"跳过 {sub_prefix}.{main_domain}: 组数无效 {group_count}")
                 continue
             
-            # 构建完整的子域名
-            full_sub_domain = f"{sub_prefix}.{main_domain}"
+            # 构建完整的子域名（处理 @ 记录）
+            if sub_prefix == "@":
+                full_sub_domain = main_domain  # @ 记录直接使用主域名
+                display_name = main_domain
+                print(f"\n处理域名: {display_name} (主域名 @ 记录)")
+            else:
+                full_sub_domain = f"{sub_prefix}.{main_domain}"
+                display_name = full_sub_domain
+                print(f"\n处理域名: {display_name}")
             
-            print(f"\n处理域名: {full_sub_domain}")
             print(f"需要 {group_count} 组记录 (每组: 2个IPv4 + 2个IPv6)")
             
             # 判断是否是特殊的 def 子域名
@@ -440,6 +455,6 @@ if __name__ == '__main__':
                             except Exception as e:
                                 print(f"  删除AAAA记录失败: {str(e)}")
             
-            print(f"完成 {full_sub_domain}")
+            print(f"完成 {display_name}")
     
     print("\n所有操作完成")
