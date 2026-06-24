@@ -3,7 +3,7 @@
 
 import sys, os, json, time, random, traceback
 import ipaddress
-import requests  # 使用 requests 调用 DoH API
+import requests
 
 # ==================== 从环境变量获取配置 ====================
 config = json.loads(os.environ["CONFIG"])
@@ -23,7 +23,6 @@ CNAME_TARGET = "fallback.itedev.com.cdn.cloudflare.net"
 
 # Cloudflare DoH 端点
 CLOUDFLARE_DOH = "https://cloudflare-dns.com/dns-query"
-# 备用 DoH 端点
 CLOUDFLARE_DOH_BACKUP = "https://dns.cloudflare.com/dns-query"
 
 # ==================== 从环境变量获取CIDR配置 ====================
@@ -115,18 +114,16 @@ def parse_doh_response(data, record_type):
     """
     ips = []
     
-    # 检查是否有 Answer 部分
     if 'Answer' not in data:
         print(f"DoH响应中没有Answer部分: {data}")
         return ips
     
     for answer in data['Answer']:
-        # 检查记录类型
-        if record_type == 'A' and answer['type'] == 1:  # 1 是 A 记录
+        if record_type == 'A' and answer['type'] == 1:      # A 记录
             ip = answer['data']
             if not is_ip_blacklisted(ip):
                 ips.append(ip)
-        elif record_type == 'AAAA' and answer['type'] == 28:  # 28 是 AAAA 记录
+        elif record_type == 'AAAA' and answer['type'] == 28: # AAAA 记录
             ip = answer['data']
             if not is_ip_blacklisted(ip):
                 ips.append(ip)
@@ -142,14 +139,12 @@ def get_cname_target_ips():
     
     print(f"\n通过 Cloudflare DoH 解析: {CNAME_TARGET}")
     
-    # 解析 A 记录 (IPv4)
     ipv4_list = resolve_via_cloudflare_doh(CNAME_TARGET, 'A')
     result['v4'] = [{'ip': ip} for ip in ipv4_list]
     print(f"  IPv4: 获取到 {len(ipv4_list)} 个IP")
     if ipv4_list:
         print(f"    {ipv4_list}")
     
-    # 解析 AAAA 记录 (IPv6)
     ipv6_list = resolve_via_cloudflare_doh(CNAME_TARGET, 'AAAA')
     result['v6'] = [{'ip': ip} for ip in ipv6_list]
     print(f"  IPv6: 获取到 {len(ipv6_list)} 个IP")
@@ -174,21 +169,18 @@ def flatten_cidrs(cidr_list, is_v6=False):
                 # IPv4: 排除网络地址和广播地址
                 if network.num_addresses <= 2:
                     continue
-                # 获取所有可用主机IP
                 hosts = list(network.hosts())
                 for ip in hosts:
                     ip_str = str(ip)
                     if not is_ip_blacklisted(ip_str):
                         ip_pool.append(ip_str)
             else:
-                # IPv6: 排除网络地址
+                # IPv6: 排除网络地址，随机采样
                 if network.num_addresses <= 1:
                     continue
-                # IPv6地址空间太大，随机采样
                 first = int(network.network_address)
                 last = int(network.broadcast_address) if network.broadcast_address else first + network.num_addresses - 1
                 
-                # 采样数量：最多1000个随机IP
                 sample_size = min(1000, network.num_addresses)
                 for _ in range(sample_size):
                     random_int = random.randint(first + 1, last)
@@ -196,7 +188,7 @@ def flatten_cidrs(cidr_list, is_v6=False):
                     ip_str = str(ip)
                     if not is_ip_blacklisted(ip_str):
                         ip_pool.append(ip_str)
-                
+                        
         except Exception as e:
             print(f"处理CIDR {cidr} 时出错: {str(e)}")
             continue
@@ -227,7 +219,6 @@ def get_random_ips_from_pool(pool, count):
         return []
     if len(pool) < count:
         print(f"警告: IP池只有 {len(pool)} 个IP，但需要 {count} 个")
-        # 允许重复使用IP
         return random.choices(pool, k=count)
     return random.sample(pool, count)
 
@@ -254,27 +245,44 @@ def get_zone_id(domain):
     return None
 
 def get_record_sets(zone_id, full_domain):
-    """获取指定域名的所有记录集"""
-    request = ListRecordSetsWithLineRequest()
-    request.limit = 100
-    request.name = full_domain + "."
-    request.zone_id = zone_id
-    
-    response = client.list_record_sets_with_line(request)
-    data = json.loads(str(response))
-    
-    records = []
-    for record in data.get('recordsets', []):
-        if record['name'] == full_domain + ".":
-            records.append({
-                'id': record['id'],
-                'name': record['name'],
-                'type': record['type'],
-                'records': record.get('records', []),
-                'line': record.get('line', ''),
-                'ttl': record.get('ttl', 300)
-            })
-    return records
+    """
+    获取指定域名的所有记录集（带分页，兼容名称末尾点）
+    ✅ 修复点：添加 zone_id，使用分页，统一名称比较
+    """
+    all_records = []
+    offset = 0
+    limit = 100
+    # 保证查询名称以点结尾
+    query_name = full_domain.rstrip('.') + '.'
+
+    while True:
+        request = ListRecordSetsWithLineRequest()
+        request.zone_id = zone_id          # ✅ 必须设置 zone_id
+        request.limit = limit
+        request.offset = offset
+        request.name = query_name
+
+        response = client.list_record_sets_with_line(request)
+        data = json.loads(str(response))
+        recordsets = data.get('recordsets', [])
+
+        # 过滤出完全匹配的域名（去掉末尾点比较）
+        for record in recordsets:
+            if record['name'].rstrip('.') == full_domain.rstrip('.'):
+                all_records.append({
+                    'id': record['id'],
+                    'name': record['name'],
+                    'type': record['type'],
+                    'records': record.get('records', []),
+                    'line': record.get('line', ''),
+                    'ttl': record.get('ttl', 300)
+                })
+
+        if len(recordsets) < limit:
+            break
+        offset += limit
+
+    return all_records
 
 def create_record_set(zone_id, full_domain, record_type, ips, ttl=600):
     """创建记录集"""
@@ -283,7 +291,7 @@ def create_record_set(zone_id, full_domain, record_type, ips, ttl=600):
     
     request.body = CreateRecordSetWithLineReq(
         type=record_type,
-        name=full_domain + ".",
+        name=full_domain.rstrip('.') + ".",
         ttl=ttl,
         records=ips,
         line='default_view'
@@ -299,7 +307,7 @@ def update_record_set(zone_id, record_id, full_domain, record_type, ips, ttl=600
     request.recordset_id = record_id
     
     request.body = UpdateRecordSetReq(
-        name=full_domain + ".",
+        name=full_domain.rstrip('.') + ".",
         type=record_type,
         ttl=ttl,
         records=ips
@@ -318,15 +326,15 @@ def delete_record_set(zone_id, record_id):
 
 # ==================== 主逻辑 ====================
 if __name__ == '__main__':
-    # 遍历所有主域名配置
+    # 读取 TTL 配置，如果没有则默认 600
+    default_ttl = config.get("ttl", 600)
+
     for main_domain, sub_configs in DOMAINS.items():
-        # 获取主域名ID
         zone_id = get_zone_id(main_domain)
         if not zone_id:
             print(f"错误: 找不到主域名 {main_domain}")
             continue
         
-        # 遍历每个子域名配置
         for sub_prefix, group_count in sub_configs.items():
             if group_count <= 0:
                 if sub_prefix == "@":
@@ -335,9 +343,9 @@ if __name__ == '__main__':
                     print(f"跳过 {sub_prefix}.{main_domain}: 组数无效 {group_count}")
                 continue
             
-            # 构建完整的子域名（处理 @ 记录）
+            # 构建完整的子域名
             if sub_prefix == "@":
-                full_sub_domain = main_domain  # @ 记录直接使用主域名
+                full_sub_domain = main_domain
                 display_name = main_domain
                 print(f"\n处理域名: {display_name} (主域名 @ 记录)")
             else:
@@ -350,25 +358,22 @@ if __name__ == '__main__':
             # 判断是否是特殊的 def 子域名
             if sub_prefix == "def":
                 print(f"  特殊处理: 使用 Cloudflare DoH 解析得到的IP")
-                # 使用 CNAME 目标的IP
                 ipv4_pool = [ip['ip'] for ip in CNAME_IPS['v4']]
                 ipv6_pool = [ip['ip'] for ip in CNAME_IPS['v6']]
             else:
-                # 使用随机IP池
                 ipv4_pool = IPV4_POOL
                 ipv6_pool = IPV6_POOL
             
             # 获取当前所有记录集
             existing_records = get_record_sets(zone_id, full_sub_domain)
             
-            # 分离A和AAAA记录
+            # 分离A和AAAA记录 (只保留 default_view 线路)
             a_records = [r for r in existing_records if r['type'] == 'A' and r['line'] == 'default_view']
             aaaa_records = [r for r in existing_records if r['type'] == 'AAAA' and r['line'] == 'default_view']
             
             print(f"当前A记录数: {len(a_records)}")
             print(f"当前AAAA记录数: {len(aaaa_records)}")
             
-            # 目标数量
             target_a_count = group_count
             target_aaaa_count = group_count
             
@@ -377,15 +382,13 @@ if __name__ == '__main__':
                 if not ipv4_pool:
                     print(f"  警告: IPv4池为空，跳过A记录")
                 else:
-                    # 从IPv4池中随机获取所有需要的IP
                     all_ipv4 = get_random_ips_from_pool(ipv4_pool, target_a_count * 2)
                     print(f"获取到 {len(all_ipv4)} 个IPv4地址")
                     
-                    # 更新或创建A记录
                     for i in range(target_a_count):
-                        # 每2个IP为一组
                         start_idx = i * 2
                         if start_idx + 1 >= len(all_ipv4):
+                            print(f"  警告: IPv4地址不足，跳过第 {i} 组")
                             break
                         
                         ip_pair = all_ipv4[start_idx:start_idx + 2]
@@ -393,14 +396,14 @@ if __name__ == '__main__':
                         if i < len(a_records):
                             # 更新现有记录
                             try:
-                                update_record_set(zone_id, a_records[i]['id'], full_sub_domain, 'A', ip_pair, config["ttl"])
+                                update_record_set(zone_id, a_records[i]['id'], full_sub_domain, 'A', ip_pair, default_ttl)
                                 print(f"  更新A记录[{i}]: {ip_pair}")
                             except Exception as e:
                                 print(f"  更新A记录[{i}]失败: {str(e)}")
                         else:
                             # 创建新记录
                             try:
-                                create_record_set(zone_id, full_sub_domain, 'A', ip_pair, config["ttl"])
+                                create_record_set(zone_id, full_sub_domain, 'A', ip_pair, default_ttl)
                                 print(f"  创建A记录[{i}]: {ip_pair}")
                             except Exception as e:
                                 print(f"  创建A记录[{i}]失败: {str(e)}")
@@ -419,35 +422,30 @@ if __name__ == '__main__':
                 if not ipv6_pool:
                     print(f"  警告: IPv6池为空，跳过AAAA记录")
                 else:
-                    # 从IPv6池中随机获取所有需要的IP
                     all_ipv6 = get_random_ips_from_pool(ipv6_pool, target_aaaa_count * 2)
                     print(f"获取到 {len(all_ipv6)} 个IPv6地址")
                     
-                    # 更新或创建AAAA记录
                     for i in range(target_aaaa_count):
-                        # 每2个IP为一组
                         start_idx = i * 2
                         if start_idx + 1 >= len(all_ipv6):
+                            print(f"  警告: IPv6地址不足，跳过第 {i} 组")
                             break
                         
                         ip_pair = all_ipv6[start_idx:start_idx + 2]
                         
                         if i < len(aaaa_records):
-                            # 更新现有记录
                             try:
-                                update_record_set(zone_id, aaaa_records[i]['id'], full_sub_domain, 'AAAA', ip_pair, config["ttl"])
+                                update_record_set(zone_id, aaaa_records[i]['id'], full_sub_domain, 'AAAA', ip_pair, default_ttl)
                                 print(f"  更新AAAA记录[{i}]: {ip_pair}")
                             except Exception as e:
                                 print(f"  更新AAAA记录[{i}]失败: {str(e)}")
                         else:
-                            # 创建新记录
                             try:
-                                create_record_set(zone_id, full_sub_domain, 'AAAA', ip_pair, config["ttl"])
+                                create_record_set(zone_id, full_sub_domain, 'AAAA', ip_pair, default_ttl)
                                 print(f"  创建AAAA记录[{i}]: {ip_pair}")
                             except Exception as e:
                                 print(f"  创建AAAA记录[{i}]失败: {str(e)}")
                     
-                    # 删除多余的AAAA记录
                     if len(aaaa_records) > target_aaaa_count:
                         for extra in aaaa_records[target_aaaa_count:]:
                             try:
