@@ -258,6 +258,7 @@ def get_record_sets(zone_id, full_domain):
     request = ListRecordSetsWithLineRequest()
     request.limit = 100
     request.name = full_domain + "."
+    request.zone_id = zone_id
     
     response = client.list_record_sets_with_line(request)
     data = json.loads(str(response))
