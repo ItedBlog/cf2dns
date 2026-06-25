@@ -32,7 +32,7 @@ jobs:
       - name: 'Install dependencies'
         run: |
           # 显示安装进度但不显示详细信息
-          pip install -r requirements.txt  >> cf2dns.log 2>&1
+          pip install -r requirements.txt  #>> cf2dns.log 2>&1
         shell: bash
       
       - name: 'Run cf2dns'
