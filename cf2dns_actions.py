@@ -302,11 +302,11 @@ def create_record_set(zone_id, full_domain, record_type, ips, ttl=600):
 
 def update_record_set(zone_id, record_id, full_domain, record_type, ips, ttl=600):
     """更新记录集"""
-    request = UpdateRecordSetRequest()
+    request = UpdateRecordSetWithLineRequest()
     request.zone_id = zone_id
     request.recordset_id = record_id
     
-    request.body = UpdateRecordSetReq(
+    request.body = UpdateRecordSetWithLineReq(
         name=full_domain.rstrip('.') + ".",
         type=record_type,
         ttl=ttl,
