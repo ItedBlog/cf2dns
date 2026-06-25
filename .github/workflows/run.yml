@@ -32,7 +32,7 @@ jobs:
       - name: 'Install dependencies'
         run: |
           # 显示安装进度但不显示详细信息
-          pip install -r requirements.txt  #>> cf2dns.log 2>&1
+          pip install -r requirements.txt  >> cf2dns.log 2>&1
         shell: bash
       
       - name: 'Run cf2dns'
@@ -51,6 +51,7 @@ jobs:
             cat cf2dns.log  # 失败时才显示日志
             exit 1
           }
+          cat cf2dns.log
         shell: bash
       
       - name: 'Upload logs on failure'  # 失败时上传日志
